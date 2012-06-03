@@ -1,0 +1,15 @@
+Networked Arduino pin control
+
+This sketch receives a command via UDP, prints that command to the serial port 
+and sets the pin identified in the command to the respective state.
+After completion of actions and status changes sends back acknowledgement to the sender.
+
+@author pstehlik
+@since 2012-06-02
+
+Copyright 2012 Philip Stehlik 
+Use as is - no warranties given
+TODO:
+- Write message text on LCD
+- Allow for sending a message ID to be able to respond to explicit messages and IDs and allow the receiver to check which response was for which message
+- Allow setting multiple pin states within one message
