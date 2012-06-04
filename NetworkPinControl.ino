@@ -20,6 +20,9 @@
 #include <EthernetUdp.h>         // UDP library from: bjoern@cs.stanford.edu 12/30/2008
 
 #define SUPPORTED_PIN_MEMORY 10
+#define SUCCESS true
+#define FAILURE false
+#define NTW_UDP_PACKET_MAX_SIZE 256
 
 // Enter a MAC address and IP address for your controller below.
 // The IP address will be dependent on your local network:
@@ -30,18 +33,19 @@ IPAddress ip(192, 168, 8, 2);
 unsigned int localPort = 10042;      // local port to listen on
 
 // details about where the commands are located in the incoming string
-const int commandPin[2] = {0,2};
-const int commandState[2] = {2,1};
-const int commandMessageStart = 3;
+const int commandPinCountPos = 0;
+const int commandPinLength = 2;
+const int commandStateLength = 1;
+int commandMessageStart; //will be re-computed on each message receipt
 
 //the 'brain' of the machine
 int pinMemory[SUPPORTED_PIN_MEMORY];
 int pinStateMemory[SUPPORTED_PIN_MEMORY];
 
 // buffers for receiving and sending data
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE]; //buffer to hold incoming packet,
-const char replyBufferOk[] = "OK";       // a string to send back
-const char replyBufferError[] = "ER";       // a string to send back
+char packetBuffer[NTW_UDP_PACKET_MAX_SIZE]; //buffer to hold incoming packet,
+const char replyBufferOk[] = "OK"; //will be sent back in case of 'success'
+const char replyBufferError[] = "ER"; // will be sent back in case of error
 
 // An EthernetUDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
@@ -78,24 +82,21 @@ void loop() {
     Serial.println(Udp.remotePort());
 
     // read the packet into packetBufffer for processing
-    Udp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
+    Udp.read(packetBuffer, NTW_UDP_PACKET_MAX_SIZE);
     Serial.println("Contents:");
     Serial.println(packetBuffer);
     
     //get the pin and state out of the packet and store in memory for later application of state
-    char cmdMsg[UDP_TX_PACKET_MAX_SIZE];
-    int cmdPin = getIntegerFromCharArray(commandPin[0], commandPin[1], packetBuffer);
-    int cmdState = getIntegerFromCharArray(commandState[0], commandState[1], packetBuffer);
-    Serial.println("Received pin:");
-    Serial.println(cmdPin, DEC);
-    Serial.println("Received state to put in:");
-    Serial.println(cmdState, DEC);
-    errorOccured = !putIntoPinMemory(cmdPin, cmdState);
+    errorOccured = !parsePinsAndStatesAndPutIntoMemory(packetBuffer);
     
     if(!errorOccured){
-      //todo move message parsing into method
+      //todo move message parsing into method      
+      commandMessageStart = getIntegerFromCharArray(0,1,packetBuffer) * (commandPinLength + commandStateLength) + 1;
+      Serial.print("Message starts at:");
+      Serial.println(commandMessageStart, DEC);
       // only try parsing the message out of the command if there are enough chars
-      if(packetSize > commandMessageStart){
+      if(packetSize >= commandMessageStart){
+        char cmdMsg[NTW_UDP_PACKET_MAX_SIZE];
         //parse out the message part of the packet
         char cmdMessage[packetSize - commandMessageStart]; 
         int i;
@@ -125,9 +126,11 @@ void loop() {
 
 /**
  * Extracts an integer from a char array.  
+ * 
  * @param startPosition the start position of the integer number in the char array
  * @param integerNumbers the number of single digits of the integer (should be 5 for an integer of '   23' as whitespace is ignored)
  * @param readFromBuffer The char buffer to read from
+ * @return The parsed int from the positions given. If unable to parse, returns 0
  */
 int getIntegerFromCharArray(int startPosition, int integerNumbers, char readFromBuffer[]){
   char intBuffer[integerNumbers];
@@ -139,15 +142,41 @@ int getIntegerFromCharArray(int startPosition, int integerNumbers, char readFrom
 
 
 /**
+ * Parses all the commanded pins from the given buffer and puts them into the 
+ * memory for later application on the board
+ *
+ * @param packetBuffer The parsed character content that was received in the incoming UDP message
+ * @return SUCCESS or FAILURE
+ */
+boolean parsePinsAndStatesAndPutIntoMemory(char packetBuffer[]){
+  int pinCommandCount = getIntegerFromCharArray(0, 1, packetBuffer);
+  Serial.print("Received so many pins to set state for: ");
+  Serial.println(pinCommandCount, DEC);
+  
+  int i, currentPin, currentState;
+  for(i = 0; i < pinCommandCount; i++){
+    currentPin   = getIntegerFromCharArray(1 + (commandPinLength + commandStateLength) * i, commandPinLength, packetBuffer);
+    currentState = getIntegerFromCharArray(1 + (commandPinLength + commandStateLength) * i + commandPinLength, commandStateLength, packetBuffer);
+    if(!putIntoPinMemory(currentPin, currentState)){
+      return FAILURE;
+    }
+  }
+  return SUCCESS;
+}
+
+
+/**
  * Sets up the state of a pin.  The 'memory' will leave the pin in this state until changed through another command.
+ * 
  * @param pin The pin that should be put into state
  * @param state The state of the pin that should be set
+ * @return SUCCESS or FAILURE
  */
 boolean putIntoPinMemory(int pin, int state){
   if(state != HIGH && state != LOW){
     Serial.print("Unsupported pin state: ");
     Serial.println(state, DEC);
-    return false;
+    return FAILURE;
   }
   
   int setStateAtIndex = -1;
@@ -198,8 +227,10 @@ boolean putIntoPinMemory(int pin, int state){
   return (setStateAtIndex > -1);
 }
 
-
-
+/**
+ * Set all the pins on the board to the respective states as indicated 
+ * by the values in pinMemory and pinStateMemory.
+ */
 void applyPinMemory(){
   int i;
   Serial.println("Setting pins to respective states:");
@@ -216,16 +247,15 @@ void applyPinMemory(){
   }  
 }
 
-
 /*
   Groovy code example to use as client for the sketch
  =====================================================
  
- 
- setting pin 10 to state 1 and sending message 'Some Message String'
+  setting multiple pins to states with messages
  =====================================================
-
-data = "101Some Message String".getBytes()
+//setting 4 pins and their states
+//3 - 1, 4 - 1, 5 - 0, 6 - 1 
+data = "4031041050061Some Message String With Long Content".getBytes()
 addr = InetAddress.getByName("192.168.8.2")
 port = 10042
 packet = new DatagramPacket(data, data.length, addr, port)
@@ -239,26 +269,6 @@ response = new DatagramPacket(buffer, buffer.length)
 socket.receive(response)
 s = new String(response.data, 0, response.length)
 println "Server said: '$s'"
-
-
- setting multiple pins to states without messages
- =====================================================
-
-addr = InetAddress.getByName("192.168.8.2")
-port = 10042
-socket = new DatagramSocket()
-
-commands = [
-" 30",
-" 41",
-" 50",
-" 61"
-]
-commands.each{ singleCommand ->
-  data = singleCommand.getBytes()
-  packet = new DatagramPacket(data, data.length, addr, port)
-  socket.send(packet)
-}
  */
 
 
