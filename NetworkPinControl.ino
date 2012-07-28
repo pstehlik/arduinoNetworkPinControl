@@ -28,7 +28,7 @@
 // The IP address will be dependent on your local network:
 byte mac[] = {  
   0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(192, 168, 8, 2);
+IPAddress ip(192, 168, 26, 231);
 
 unsigned int localPort = 10042;      // local port to listen on
 
@@ -270,5 +270,3 @@ socket.receive(response)
 s = new String(response.data, 0, response.length)
 println "Server said: '$s'"
  */
-
-
